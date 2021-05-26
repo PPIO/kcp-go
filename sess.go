@@ -17,10 +17,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hindsights/gslog"
 	"github.com/pkg/errors"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
+
+var logger = gslog.GetLogger("kcp")
 
 const (
 	// 16-bytes nonce for each packet
@@ -356,6 +359,7 @@ func (s *UDPSession) Close() error {
 		// try best to send all queued messages
 		s.mu.Lock()
 		s.kcp.flush(false)
+		// s.writeFinFrame()
 		s.uncork()
 		// release pending segments
 		s.kcp.ReleaseTX()
@@ -672,6 +676,12 @@ func (s *UDPSession) packetInput(data []byte) {
 }
 
 func (s *UDPSession) kcpInput(data []byte) {
+	if data[4] == IKCP_CMD_FIN {
+		// close connection
+		// logger.Debug("kcpInput fin", s.kcp.conv)
+		s.Close()
+		return
+	}
 	var kcpInErrors, fecErrs, fecRecovered, fecParityShards uint64
 
 	fecFlag := binary.LittleEndian.Uint16(data[4:])
@@ -760,6 +770,16 @@ func (s *UDPSession) kcpInput(data []byte) {
 		atomic.AddUint64(&DefaultSnmp.FECRecovered, fecRecovered)
 	}
 
+}
+
+func (s *UDPSession) writeFinFrame() error {
+	var seg segment
+	seg.conv = s.kcp.conv
+	seg.cmd = IKCP_CMD_FIN
+	buf := make([]byte, IKCP_OVERHEAD)
+	seg.encode(buf)
+	_, err := s.conn.WriteTo(buf, s.remote)
+	return err
 }
 
 type (

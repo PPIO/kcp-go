@@ -29,6 +29,8 @@ const (
 	IKCP_PROBE_INIT  = 7000   // 7 secs to probe window size
 	IKCP_PROBE_LIMIT = 120000 // up to 120 secs to probe window
 	IKCP_SN_OFFSET   = 12
+
+	IKCP_CMD_FIN = 88 // cmd: close connection
 )
 
 // monotonic reference time point
@@ -113,6 +115,8 @@ type segment struct {
 	fastack  uint32
 	acked    uint32 // mark if the seg has acked
 	data     []byte
+
+	start_ts uint32
 }
 
 // encode a segment into buffer
@@ -155,6 +159,8 @@ type KCP struct {
 	buffer   []byte
 	reserved int
 	output   output_callback
+
+	send_timeout int
 }
 
 type ackItem struct {
@@ -358,6 +364,7 @@ func (kcp *KCP) Send(buffer []byte) int {
 			size = len(buffer)
 		}
 		seg := kcp.newSegment(size)
+		seg.start_ts = currentMs()
 		copy(seg.data, buffer[:size])
 		if kcp.stream == 0 { // message mode
 			seg.frg = uint8(count - i - 1)
