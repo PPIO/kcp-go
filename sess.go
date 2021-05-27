@@ -588,14 +588,26 @@ func (s *UDPSession) update() {
 	select {
 	case <-s.die:
 	default:
+		timeout := false
 		s.mu.Lock()
+		// logger.Debug("update", s.kcp.Inflight(), s.kcp.LastACKElapsed())
+		if s.kcp.Inflight() > 0 && s.kcp.LastACKElapsed() > 10*1000 {
+			timeout = true
+		}
 		interval := s.kcp.flush(false)
 		waitsnd := s.kcp.WaitSnd()
-		if waitsnd < int(s.kcp.snd_wnd) && waitsnd < int(s.kcp.rmt_wnd) {
-			s.notifyWriteEvent()
+		if !timeout {
+			if waitsnd < int(s.kcp.snd_wnd) && waitsnd < int(s.kcp.rmt_wnd) {
+				s.notifyWriteEvent()
+			}
+			s.uncork()
 		}
-		s.uncork()
 		s.mu.Unlock()
+		if timeout {
+			// logger.Debug("update timeout", s.kcp.Inflight(), s.kcp.LastACKElapsed())
+			s.Close()
+			return
+		}
 		// self-synchronized timed scheduling
 		SystemTimedSched.Put(s.update, time.Now().Add(time.Duration(interval)*time.Millisecond))
 	}

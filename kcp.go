@@ -115,8 +115,6 @@ type segment struct {
 	fastack  uint32
 	acked    uint32 // mark if the seg has acked
 	data     []byte
-
-	start_ts uint32
 }
 
 // encode a segment into buffer
@@ -161,6 +159,8 @@ type KCP struct {
 	output   output_callback
 
 	send_timeout int
+
+	last_recv_ack_time uint32
 }
 
 type ackItem struct {
@@ -364,7 +364,6 @@ func (kcp *KCP) Send(buffer []byte) int {
 			size = len(buffer)
 		}
 		seg := kcp.newSegment(size)
-		seg.start_ts = currentMs()
 		copy(seg.data, buffer[:size])
 		if kcp.stream == 0 { // message mode
 			seg.frg = uint8(count - i - 1)
@@ -412,12 +411,15 @@ func (kcp *KCP) shrink_buf() {
 }
 
 func (kcp *KCP) parse_ack(sn uint32) {
+	// logger.Debug("parse_ack", sn, kcp.last_recv_ack_time, len(kcp.snd_buf), kcp.snd_una, kcp.snd_nxt, kcp.Inflight())
 	if _itimediff(sn, kcp.snd_una) < 0 || _itimediff(sn, kcp.snd_nxt) >= 0 {
 		return
 	}
 
+	// logger.Debug("parse_ack2", sn, kcp.last_recv_ack_time, len(kcp.snd_buf))
 	for k := range kcp.snd_buf {
 		seg := &kcp.snd_buf[k]
+		// logger.Debug("parse_ack seg", sn, kcp.last_recv_ack_time, len(kcp.snd_buf), seg.sn)
 		if sn == seg.sn {
 			// mark and free space, but leave the segment here,
 			// and wait until `una` to delete this, then we don't
@@ -425,6 +427,8 @@ func (kcp *KCP) parse_ack(sn uint32) {
 			// which is an expensive operation for large window
 			seg.acked = 1
 			kcp.delSegment(seg)
+			kcp.last_recv_ack_time = currentMs()
+			// logger.Debug("parse_ack ok", sn, kcp.last_recv_ack_time)
 			break
 		}
 		if _itimediff(sn, seg.sn) < 0 {
@@ -438,6 +442,7 @@ func (kcp *KCP) parse_fastack(sn, ts uint32) {
 		return
 	}
 
+	// logger.Debug("parse_fastack", sn, ts, kcp.last_recv_ack_time, len(kcp.snd_buf), kcp.snd_una, kcp.snd_nxt)
 	for k := range kcp.snd_buf {
 		seg := &kcp.snd_buf[k]
 		if _itimediff(sn, seg.sn) < 0 {
@@ -461,6 +466,8 @@ func (kcp *KCP) parse_una(una uint32) int {
 	}
 	if count > 0 {
 		kcp.snd_buf = kcp.remove_front(kcp.snd_buf, count)
+		kcp.last_recv_ack_time = currentMs()
+		// logger.Debug("parse_una", una, kcp.last_recv_ack_time, len(kcp.snd_buf), kcp.snd_una, kcp.snd_nxt)
 	}
 	return count
 }
@@ -1084,4 +1091,16 @@ func (kcp *KCP) ReleaseTX() {
 	}
 	kcp.snd_queue = nil
 	kcp.snd_buf = nil
+}
+
+func (kcp *KCP) LastACKElapsed() uint32 {
+	if kcp.last_recv_ack_time == 0 {
+		return 0
+	}
+	// logger.Debug("LastACKElapsed", kcp.last_recv_ack_time)
+	return currentMs() - kcp.last_recv_ack_time
+}
+
+func (kcp *KCP) Inflight() uint32 {
+	return kcp.snd_nxt - kcp.snd_una
 }
